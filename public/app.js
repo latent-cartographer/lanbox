@@ -1,8 +1,13 @@
 const form = document.querySelector("#shareForm");
 const textInput = document.querySelector("#text");
+const deviceNameInput = document.querySelector("#deviceName");
+const ttlInput = document.querySelector("#ttl");
 const fileInput = document.querySelector("#files");
 const dropzone = document.querySelector("#dropzone");
 const selectedFiles = document.querySelector("#selectedFiles");
+const uploadProgress = document.querySelector("#uploadProgress");
+const uploadProgressBar = document.querySelector("#uploadProgressBar");
+const uploadProgressText = document.querySelector("#uploadProgressText");
 const statusEl = document.querySelector("#status");
 const itemsEl = document.querySelector("#items");
 const itemCount = document.querySelector("#itemCount");
@@ -17,12 +22,18 @@ const previewBackdrop = document.querySelector("#previewBackdrop");
 const closePreviewBtn = document.querySelector("#closePreviewBtn");
 const previewTitle = document.querySelector("#previewTitle");
 const previewBody = document.querySelector("#previewBody");
+const authPanel = document.querySelector("#authPanel");
+const authForm = document.querySelector("#authForm");
+const accessCodeInput = document.querySelector("#accessCode");
+const authStatus = document.querySelector("#authStatus");
 const template = document.querySelector("#itemTemplate");
 
 let currentFiles = [];
+let appStarted = false;
 const deviceId = getOrCreateId(localStorage, "lanbox_device_id");
 const tabId = getOrCreateId(sessionStorage, "lanbox_tab_id");
 const clientId = `${deviceId}.${tabId}`;
+deviceNameInput.value = localStorage.getItem("lanbox_device_name") || defaultDeviceName();
 
 function getOrCreateId(storage, key) {
   let value = storage.getItem(key);
@@ -33,9 +44,24 @@ function getOrCreateId(storage, key) {
   return value;
 }
 
+function defaultDeviceName() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || "";
+  if (/iphone/i.test(platform) || /iphone/i.test(navigator.userAgent)) return "iPhone";
+  if (/ipad/i.test(platform) || /ipad/i.test(navigator.userAgent)) return "iPad";
+  if (/mac/i.test(platform)) return "Mac";
+  if (/win/i.test(platform)) return "Windows";
+  if (/android/i.test(platform) || /android/i.test(navigator.userAgent)) return "Android";
+  return "我的设备";
+}
+
 function setStatus(message, type = "") {
   statusEl.textContent = message;
   statusEl.className = `status ${type}`.trim();
+}
+
+function setAuthStatus(message, type = "") {
+  authStatus.textContent = message;
+  authStatus.className = `status ${type}`.trim();
 }
 
 function formatBytes(bytes) {
@@ -59,6 +85,14 @@ function formatTime(value) {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatExpires(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  if (date.getTime() <= Date.now()) return "已过期";
+  return `过期 ${formatTime(value)}`;
 }
 
 function isUrl(text) {
@@ -219,6 +253,46 @@ function addFiles(fileList) {
   renderSelectedFiles();
 }
 
+function setUploadProgress(percent, text) {
+  uploadProgress.hidden = false;
+  uploadProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  uploadProgressText.textContent = text;
+}
+
+function hideUploadProgress() {
+  uploadProgress.hidden = true;
+  uploadProgressBar.style.width = "0%";
+  uploadProgressText.textContent = "";
+}
+
+function uploadItem(payload) {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", "/api/items");
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        setUploadProgress(percent, `正在上传 ${percent}%`);
+      } else {
+        setUploadProgress(20, "正在上传...");
+      }
+    });
+    request.addEventListener("load", () => {
+      const data = request.response || {};
+      if (request.status >= 200 && request.status < 300) {
+        resolve(data);
+      } else {
+        reject(new Error(data.error || "发送失败"));
+      }
+    });
+    request.addEventListener("error", () => reject(new Error("网络错误")));
+    request.addEventListener("abort", () => reject(new Error("上传已取消")));
+    setUploadProgress(0, "准备上传...");
+    request.send(payload);
+  });
+}
+
 async function loadInfo() {
   try {
     const response = await fetch("/api/info", { cache: "no-store" });
@@ -226,17 +300,34 @@ async function loadInfo() {
     const address = info.addresses?.[0] || location.origin;
     serverHint.textContent = "内网设备临时传递板";
     qrImage.src = `/api/qr.svg?url=${encodeURIComponent(address)}`;
+    return info;
   } catch {
     serverHint.textContent = "局域网传递板";
     qrImage.src = `/api/qr.svg?url=${encodeURIComponent(location.origin)}`;
+    return { auth_required: false, authenticated: true };
   }
 }
 
 async function loadItems() {
   const response = await fetch("/api/items", { cache: "no-store" });
+  if (response.status === 401) {
+    showAuth();
+    throw new Error("请先输入访问口令");
+  }
   if (!response.ok) throw new Error("读取列表失败");
   const data = await response.json();
   renderItems(data.items || []);
+}
+
+function showAuth() {
+  document.body.classList.add("locked");
+  authPanel.hidden = false;
+  accessCodeInput.focus();
+}
+
+function hideAuth() {
+  authPanel.hidden = true;
+  document.body.classList.remove("locked");
 }
 
 function renderItems(items) {
@@ -253,7 +344,13 @@ function renderItems(items) {
   items.forEach((item) => {
     const node = template.content.firstElementChild.cloneNode(true);
     node.dataset.id = item.id;
-    node.querySelector(".meta").textContent = `${formatTime(item.created_at)} · ${item.client_ip || "unknown"} · ${item.saved ? "已钉住" : "临时"}`;
+    const meta = [
+      formatTime(item.created_at),
+      item.device_name || item.client_ip || "unknown",
+      item.saved ? "已钉住" : "临时",
+      formatExpires(item.expires_at),
+    ].filter(Boolean);
+    node.querySelector(".meta").textContent = meta.join(" · ");
     node.querySelector("h3").textContent = item.title || "";
     renderText(item.text || "", node.querySelector(".item-text"));
 
@@ -317,6 +414,13 @@ function renderItems(items) {
         setStatus(error.message, "error");
       }
     });
+    const zipButton = node.querySelector(".zip");
+    const hasFiles = Boolean((item.files || []).length);
+    zipButton.disabled = !hasFiles;
+    zipButton.addEventListener("click", () => {
+      if (!hasFiles) return;
+      window.location.href = `/api/items/${encodeURIComponent(item.id)}/files.zip`;
+    });
     node.querySelector(".remove").addEventListener("click", async () => {
       const ok = window.confirm("删除这条共享内容？");
       if (!ok) return;
@@ -361,6 +465,10 @@ document.addEventListener("paste", (event) => {
   }
 });
 
+deviceNameInput.addEventListener("input", () => {
+  localStorage.setItem("lanbox_device_name", deviceNameInput.value.trim());
+});
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const submit = form.querySelector("[type=submit]");
@@ -369,17 +477,21 @@ form.addEventListener("submit", async (event) => {
   try {
     const payload = new FormData();
     payload.append("text", textInput.value);
+    payload.append("device_name", deviceNameInput.value.trim());
+    payload.append("ttl_seconds", ttlInput.value);
     currentFiles.forEach((file) => payload.append("files", file, file.name));
-    const response = await fetch("/api/items", { method: "POST", body: payload });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "发送失败");
+    await uploadItem(payload);
     form.reset();
+    deviceNameInput.value = localStorage.getItem("lanbox_device_name") || defaultDeviceName();
+    ttlInput.value = "0";
     currentFiles = [];
     renderSelectedFiles();
+    hideUploadProgress();
     await loadItems();
     setStatus("已发送", "ok");
   } catch (error) {
     setStatus(error.message, "error");
+    hideUploadProgress();
   } finally {
     submit.disabled = false;
   }
@@ -387,8 +499,11 @@ form.addEventListener("submit", async (event) => {
 
 clearBtn.addEventListener("click", () => {
   form.reset();
+  deviceNameInput.value = localStorage.getItem("lanbox_device_name") || defaultDeviceName();
+  ttlInput.value = "0";
   currentFiles = [];
   renderSelectedFiles();
+  hideUploadProgress();
   setStatus("");
 });
 
@@ -423,6 +538,7 @@ async function heartbeat() {
     body: JSON.stringify({
       client_id: clientId,
       state: document.hidden ? "background" : "active",
+      device_name: deviceNameInput.value.trim(),
     }),
     cache: "no-store",
   });
@@ -432,9 +548,36 @@ function heartbeatBeacon() {
   const payload = JSON.stringify({
     client_id: clientId,
     state: document.hidden ? "background" : "active",
+    device_name: deviceNameInput.value.trim(),
   });
   navigator.sendBeacon("/api/heartbeat", new Blob([payload], { type: "application/json" }));
 }
+
+authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setAuthStatus("正在验证...");
+  const submit = authForm.querySelector("[type=submit]");
+  submit.disabled = true;
+  try {
+    const response = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: accessCodeInput.value.trim() }),
+      cache: "no-store",
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "验证失败");
+    accessCodeInput.value = "";
+    setAuthStatus("");
+    hideAuth();
+    await loadInfo();
+    startApp();
+  } catch (error) {
+    setAuthStatus(error.message, "error");
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 window.addEventListener("pagehide", () => {
   navigator.sendBeacon(`/api/clients/${encodeURIComponent(clientId)}/close`);
@@ -444,12 +587,34 @@ document.addEventListener("visibilitychange", () => {
   heartbeatBeacon();
 });
 
-heartbeat().catch(() => {});
-setInterval(() => {
+function startApp() {
+  if (appStarted) {
+    loadItems().catch((error) => setStatus(error.message, "error"));
+    return;
+  }
+  appStarted = true;
   heartbeat().catch(() => {});
-}, 5000);
-loadInfo();
-loadItems().catch((error) => setStatus(error.message, "error"));
-setInterval(() => {
-  loadItems().catch(() => {});
-}, 5000);
+  setInterval(() => {
+    heartbeat().catch(() => {});
+  }, 5000);
+  loadItems().catch((error) => setStatus(error.message, "error"));
+  setInterval(() => {
+    loadItems().catch(() => {});
+  }, 5000);
+}
+
+async function boot() {
+  const info = await loadInfo();
+  if (info.auth_required && !info.authenticated) {
+    showAuth();
+    return;
+  }
+  hideAuth();
+  startApp();
+}
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
+}
+
+boot();

@@ -4,9 +4,21 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>LanBox</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#167f6b">
     <link rel="stylesheet" href="/styles.css">
   </head>
-  <body>
+  <body class="locked">
+    <section class="auth-panel" id="authPanel" aria-label="访问验证">
+      <form class="auth-box" id="authForm">
+        <h1>LanBox</h1>
+        <p>输入这台机器启动时显示的访问口令</p>
+        <input id="accessCode" name="accessCode" inputmode="numeric" autocomplete="one-time-code" placeholder="访问口令">
+        <button class="primary" type="submit">进入</button>
+        <p class="status" id="authStatus" role="status"></p>
+      </form>
+    </section>
+
     <header class="topbar">
       <div>
         <h1>LanBox</h1>
@@ -25,8 +37,23 @@
         </div>
         <form id="shareForm">
           <div class="field">
+            <label for="deviceName">设备名</label>
+            <input id="deviceName" name="deviceName" maxlength="40" placeholder="例如 Mac mini、iPhone、Windows">
+          </div>
+          <div class="field">
             <label for="text">文本或链接</label>
             <textarea id="text" name="text" rows="6" placeholder="粘贴文章链接、备注、软件地址或任意文本"></textarea>
+          </div>
+          <div class="field">
+            <label for="ttl">过期时间</label>
+            <select id="ttl" name="ttl">
+              <option value="0">页面都关闭后自动清理</option>
+              <option value="600">10 分钟后清理</option>
+              <option value="3600">1 小时后清理</option>
+              <option value="21600">6 小时后清理</option>
+              <option value="86400">1 天后清理</option>
+              <option value="604800">7 天后清理</option>
+            </select>
           </div>
           <div class="dropzone" id="dropzone">
             <input id="files" name="files" type="file" multiple>
@@ -36,6 +63,10 @@
             </div>
           </div>
           <div class="selected" id="selectedFiles" aria-live="polite"></div>
+          <div class="upload-progress" id="uploadProgress" hidden>
+            <div><span id="uploadProgressBar"></span></div>
+            <p id="uploadProgressText">正在上传...</p>
+          </div>
           <div class="actions">
             <button class="primary" type="submit">发送</button>
             <button type="button" id="clearBtn">清空</button>
@@ -64,6 +95,7 @@
         <div class="item-actions">
           <button class="icon-button keep" title="钉住" aria-label="钉住">📌</button>
           <button class="icon-button copy" title="复制内容" aria-label="复制内容">⧉</button>
+          <button class="icon-button zip" title="全部下载" aria-label="全部下载">↓</button>
           <button class="icon-button remove" title="删除" aria-label="删除">×</button>
         </div>
       </article>

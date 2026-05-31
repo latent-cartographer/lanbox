@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 import cgi
+import hmac
 import json
 import mimetypes
 import os
 import posixpath
 import re
+import secrets
 import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
+import zipfile
 from datetime import datetime, timezone
 from html import escape
+from http.cookies import SimpleCookie
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -28,6 +33,9 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 CLIENT_TTL_SECONDS = int(os.environ.get("LANBOX_CLIENT_TTL_SECONDS", "20"))
 BACKGROUND_CLIENT_TTL_SECONDS = int(os.environ.get("LANBOX_BACKGROUND_CLIENT_TTL_SECONDS", "600"))
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("LANBOX_CLEANUP_INTERVAL_SECONDS", "5"))
+ACCESS_CODE_ENV = os.environ.get("LANBOX_ACCESS_CODE")
+ACCESS_CODE_DISABLED = ACCESS_CODE_ENV is not None and ACCESS_CODE_ENV.lower() in ("", "0", "off", "false", "no")
+ACCESS_CODE = "" if ACCESS_CODE_DISABLED else (ACCESS_CODE_ENV or f"{secrets.randbelow(1_000_000):06d}")
 
 ITEM_LOCK = threading.Lock()
 ACTIVE_LOCK = threading.Lock()
@@ -41,6 +49,15 @@ QR_ECC_CODEWORDS = 20
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def ensure_dirs():
@@ -84,6 +101,33 @@ def unique_path(folder, filename):
         candidate = folder / f"{stem}-{index}{suffix}"
         index += 1
     return candidate
+
+
+def unique_zip_name(seen, filename):
+    base = safe_filename(filename)
+    stem = Path(base).stem or "file"
+    suffix = Path(base).suffix
+    candidate = base
+    index = 2
+    while candidate in seen:
+        candidate = f"{stem}-{index}{suffix}"
+        index += 1
+    seen.add(candidate)
+    return candidate
+
+
+def safe_device_name(value):
+    value = re.sub(r"\s+", " ", (value or "")).strip()
+    return value[:40]
+
+
+def parse_ttl_seconds(value):
+    try:
+        ttl = int(value)
+    except (TypeError, ValueError):
+        return 0
+    allowed = {0, 600, 3600, 21600, 86400, 604800}
+    return ttl if ttl in allowed else 0
 
 
 def form_file_fields(form, name):
@@ -144,10 +188,32 @@ def remove_unsaved_items_if_idle():
     return len(removed_ids)
 
 
+def remove_expired_items():
+    now = datetime.now(timezone.utc)
+    removed_ids = []
+    with ITEM_LOCK:
+        items = load_items()
+        kept = []
+        for item in items:
+            expires_at = parse_iso(item.get("expires_at", ""))
+            if not item.get("saved") and expires_at and expires_at <= now:
+                removed_ids.append(item.get("id"))
+            else:
+                kept.append(item)
+        if removed_ids:
+            save_items(kept)
+
+    for item_id in removed_ids:
+        if item_id:
+            shutil.rmtree(UPLOAD_DIR / item_id, ignore_errors=True)
+    return len(removed_ids)
+
+
 def cleanup_loop():
     while True:
         time.sleep(CLEANUP_INTERVAL_SECONDS)
         try:
+            remove_expired_items()
             remove_unsaved_items_if_idle()
         except Exception as exc:
             sys.stderr.write(f"cleanup error: {exc}\n")
@@ -419,6 +485,10 @@ def print_access_info(port):
     print(f"LanBox running on {local_url}")
     for address in addresses:
         print(f"LAN address: {address}")
+    if ACCESS_CODE_DISABLED:
+        print("Access code: disabled")
+    else:
+        print(f"Access code: {ACCESS_CODE}")
     if os.environ.get("LANBOX_TERMINAL_QR") == "1" and addresses:
         print("\nScan to open on another device:")
         try:
@@ -427,6 +497,7 @@ def print_access_info(port):
             print(f"QR skipped: address is too long ({addresses[0]})")
     print(f"Data directory: {DATA_DIR}")
     print("Press Ctrl+C to stop.")
+    sys.stdout.flush()
 
 
 class LanBoxHandler(BaseHTTPRequestHandler):
@@ -439,14 +510,48 @@ class LanBoxHandler(BaseHTTPRequestHandler):
             fmt % args,
         ))
 
-    def send_json(self, payload, status=HTTPStatus.OK):
+    def send_json(self, payload, status=HTTPStatus.OK, headers=None):
         body = json_bytes(payload)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def cookie_access_code(self):
+        raw = self.headers.get("Cookie", "")
+        if not raw:
+            return ""
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw)
+        except Exception:
+            return ""
+        morsel = cookie.get("lanbox_code")
+        return morsel.value if morsel else ""
+
+    def has_access(self):
+        if ACCESS_CODE_DISABLED:
+            return True
+        candidates = [
+            self.headers.get("X-LanBox-Code", ""),
+            self.cookie_access_code(),
+        ]
+        return any(hmac.compare_digest(str(candidate), ACCESS_CODE) for candidate in candidates)
+
+    def require_access(self):
+        if self.has_access():
+            return True
+        self.send_json({"error": "需要访问口令"}, HTTPStatus.UNAUTHORIZED)
+        return False
+
+    def set_access_cookie(self, clear=False):
+        if clear:
+            return "lanbox_code=; Max-Age=0; Path=/; SameSite=Strict"
+        return f"lanbox_code={ACCESS_CODE}; Max-Age=2592000; Path=/; SameSite=Strict"
 
     def send_text(self, message, status=HTTPStatus.BAD_REQUEST):
         body = message.encode("utf-8")
@@ -469,11 +574,22 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/items":
+            if not self.require_access():
+                return
+            remove_expired_items()
             with ITEM_LOCK:
                 items = load_items()
             self.send_json({"items": items})
             return
         if path == "/api/info":
+            authenticated = self.has_access()
+            if not ACCESS_CODE_DISABLED and not authenticated:
+                self.send_json({
+                    "name": "LanBox",
+                    "auth_required": True,
+                    "authenticated": False,
+                })
+                return
             self.send_json({
                 "name": "LanBox",
                 "hostname": socket.gethostname(),
@@ -481,6 +597,8 @@ class LanBoxHandler(BaseHTTPRequestHandler):
                 "max_upload_mb": MAX_UPLOAD_MB,
                 "client_ttl_seconds": CLIENT_TTL_SECONDS,
                 "background_client_ttl_seconds": BACKGROUND_CLIENT_TTL_SECONDS,
+                "auth_required": not ACCESS_CODE_DISABLED,
+                "authenticated": authenticated,
                 "addresses": local_addresses(self.server.server_port),
             })
             return
@@ -497,12 +615,28 @@ class LanBoxHandler(BaseHTTPRequestHandler):
                 self.send_text("QR URL is too long", HTTPStatus.BAD_REQUEST)
             return
         if path.startswith("/files/"):
+            if not self.require_access():
+                return
             self.serve_uploaded_file(path, parsed.query)
+            return
+        zip_match = re.fullmatch(r"/api/items/([A-Za-z0-9-]+)/files.zip", path)
+        if zip_match:
+            if not self.require_access():
+                return
+            self.serve_item_zip(zip_match.group(1))
             return
         self.serve_static(path)
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/auth":
+            self.handle_auth()
+            return
+        if parsed.path == "/api/logout":
+            self.send_json({"ok": True}, headers={"Set-Cookie": self.set_access_cookie(clear=True)})
+            return
+        if not self.require_access():
+            return
         if parsed.path == "/api/heartbeat":
             self.handle_heartbeat()
             return
@@ -543,6 +677,11 @@ class LanBoxHandler(BaseHTTPRequestHandler):
 
         text = (form.getfirst("text", "") or "").strip()
         title = (form.getfirst("title", "") or "").strip()
+        device_name = safe_device_name(form.getfirst("device_name", "") or "")
+        ttl_seconds = parse_ttl_seconds(form.getfirst("ttl_seconds", "") or "")
+        expires_at = ""
+        if ttl_seconds:
+            expires_at = datetime.fromtimestamp(time.time() + ttl_seconds, timezone.utc).isoformat()
         files = []
         item_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(4).hex()
         item_dir = UPLOAD_DIR / item_id
@@ -577,6 +716,8 @@ class LanBoxHandler(BaseHTTPRequestHandler):
             "client_ip": self.client_address[0],
             "saved": False,
             "saved_at": "",
+            "expires_at": expires_at,
+            "device_name": device_name,
             "title": title,
             "text": text,
             "files": files,
@@ -603,10 +744,12 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         state = str(payload.get("state", "active")).strip()
         if state not in ("active", "background"):
             state = "active"
+        device_name = safe_device_name(payload.get("device_name", "") or "")
         with ACTIVE_LOCK:
             ACTIVE_CLIENTS[client_id] = {
                 "seen_at": time.time(),
                 "state": state,
+                "device_name": device_name,
             }
             prune_active_clients()
             active_count = len(ACTIVE_CLIENTS)
@@ -618,6 +761,26 @@ class LanBoxHandler(BaseHTTPRequestHandler):
             "ttl_seconds": CLIENT_TTL_SECONDS,
             "background_ttl_seconds": BACKGROUND_CLIENT_TTL_SECONDS,
         })
+
+    def handle_auth(self):
+        if ACCESS_CODE_DISABLED:
+            self.send_json({"ok": True, "auth_required": False})
+            return
+        content_length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(content_length) if content_length else b"{}"
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except json.JSONDecodeError:
+            self.send_json({"error": "Invalid JSON"}, HTTPStatus.BAD_REQUEST)
+            return
+        code = str(payload.get("code", "")).strip()
+        if not hmac.compare_digest(code, ACCESS_CODE):
+            self.send_json({"error": "访问口令不正确"}, HTTPStatus.UNAUTHORIZED)
+            return
+        self.send_json({
+            "ok": True,
+            "auth_required": True,
+        }, headers={"Set-Cookie": self.set_access_cookie()})
 
     def handle_client_close(self, client_id):
         with ACTIVE_LOCK:
@@ -647,6 +810,8 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def do_DELETE(self):
+        if not self.require_access():
+            return
         parsed = urlparse(self.path)
         match = re.fullmatch(r"/api/items/([A-Za-z0-9-]+)", parsed.path)
         if not match:
@@ -674,7 +839,10 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         if not target.exists() or not target.is_file():
             self.send_text("Not found", HTTPStatus.NOT_FOUND)
             return
-        mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        if target.name.endswith(".webmanifest"):
+            mime = "application/manifest+json"
+        else:
+            mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         body = target.read_bytes()
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", f"{mime}; charset=utf-8" if mime.startswith("text/") else mime)
@@ -707,9 +875,41 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         with target.open("rb") as src:
             shutil.copyfileobj(src, self.wfile)
 
+    def serve_item_zip(self, item_id):
+        with ITEM_LOCK:
+            items = load_items()
+            item = next((entry for entry in items if entry.get("id") == item_id), None)
+        if not item:
+            self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        files = item.get("files") or []
+        if not files:
+            self.send_json({"error": "没有可打包下载的文件"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        with tempfile.TemporaryFile() as tmp:
+            seen = set()
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for file_info in files:
+                    stored = safe_filename(file_info.get("stored") or file_info.get("name") or "file")
+                    source = UPLOAD_DIR / item_id / stored
+                    if not source.exists() or not source.is_file():
+                        continue
+                    archive.write(source, unique_zip_name(seen, file_info.get("name") or stored))
+            size = tmp.tell()
+            tmp.seek(0)
+            filename = f"lanbox-{item_id}.zip"
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+            self.end_headers()
+            shutil.copyfileobj(tmp, self.wfile)
+
 
 def main():
     ensure_dirs()
+    remove_expired_items()
     remove_unsaved_items_if_idle()
     host = os.environ.get("LANBOX_HOST", "0.0.0.0")
     port = int(os.environ.get("LANBOX_PORT", "8787"))

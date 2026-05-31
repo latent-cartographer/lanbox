@@ -31,8 +31,45 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
+}
+
+body.locked .topbar,
+body.locked .shell {
+  display: none;
+}
+
+.auth-panel {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.auth-panel[hidden] {
+  display: none;
+}
+
+.auth-box {
+  width: min(360px, 100%);
+  display: grid;
+  gap: 14px;
+  padding: 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.auth-box h1 {
+  font-size: 28px;
+}
+
+.auth-box p {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .topbar {
@@ -132,6 +169,7 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
@@ -146,6 +184,11 @@ input {
   padding: 9px 11px;
 }
 
+select {
+  min-height: 42px;
+  padding: 9px 36px 9px 11px;
+}
+
 textarea {
   min-height: 146px;
   resize: vertical;
@@ -154,6 +197,7 @@ textarea {
 }
 
 input:focus,
+select:focus,
 textarea:focus,
 .dropzone:focus-within {
   border-color: var(--accent);
@@ -206,6 +250,36 @@ textarea:focus,
 
 .selected div {
   overflow-wrap: anywhere;
+}
+
+.upload-progress {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.upload-progress[hidden] {
+  display: none;
+}
+
+.upload-progress div {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e6ebf1;
+}
+
+.upload-progress span {
+  display: block;
+  width: 0%;
+  height: 100%;
+  background: var(--accent);
+  transition: width 120ms ease;
+}
+
+.upload-progress p {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .actions {
@@ -396,6 +470,10 @@ button:disabled {
 
 .remove {
   color: var(--danger);
+}
+
+.zip {
+  color: #0b67c1;
 }
 
 .keep {
