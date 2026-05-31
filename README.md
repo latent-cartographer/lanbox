@@ -16,7 +16,7 @@ python3 server.py
 
 ```text
 LanBox running on http://127.0.0.1:8787
-LAN address: http://192.168.1.23:8787
+LAN address: http://<your-lan-ip>:8787
 ```
 
 其他设备连接同一个 Wi-Fi 或局域网后，打开 `LAN address` 里的地址即可。页面左侧有“扫码进入”按钮，点击后会显示二维码，后续手机、平板或其他人的设备可以直接扫电脑屏幕进入。
