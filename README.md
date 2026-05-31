@@ -12,11 +12,11 @@ LanBox 是一个只在内网使用的浏览器传递板。任意设备打开同�
 python3 server.py
 ```
 
-默认监听 `0.0.0.0:8787`。启动后终端会打印类似：
+默认监听 `0.0.0.0`，端口可通过 `LANBOX_PORT` 配置。启动后终端会打印类似：
 
 ```text
-LanBox running on http://127.0.0.1:8787
-LAN address: http://<your-lan-ip>:8787
+LanBox running on http://127.0.0.1:<port>
+LAN address: http://<your-lan-ip>:<port>
 ```
 
 其他设备连接同一个 Wi-Fi 或局域网后，打开 `LAN address` 里的地址即可。页面左侧有“扫码进入”按钮，点击后会显示二维码，后续手机、平板或其他人的设备可以直接扫电脑屏幕进入。
