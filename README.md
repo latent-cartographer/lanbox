@@ -33,12 +33,14 @@ LANBOX_TERMINAL_QR=1 python3 server.py
 LANBOX_PORT=9000 python3 server.py
 LANBOX_MAX_UPLOAD_MB=2048 python3 server.py
 LANBOX_CLIENT_TTL_SECONDS=20 python3 server.py
+LANBOX_BACKGROUND_CLIENT_TTL_SECONDS=600 python3 server.py
 ```
 
 - `LANBOX_PORT`：端口，默认 `8787`
 - `LANBOX_HOST`：监听地址，默认 `0.0.0.0`
 - `LANBOX_MAX_UPLOAD_MB`：单次请求最大大小，默认 `1024`
-- `LANBOX_CLIENT_TTL_SECONDS`：浏览器断开心跳后多久视为关闭，默认 `20`
+- `LANBOX_CLIENT_TTL_SECONDS`：前台页面断开心跳后多久视为关闭，默认 `20`
+- `LANBOX_BACKGROUND_CLIENT_TTL_SECONDS`：后台页面断开心跳后多久视为关闭，默认 `600`
 
 ## 数据位置
 

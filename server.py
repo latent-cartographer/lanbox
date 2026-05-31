@@ -26,6 +26,7 @@ ITEMS_FILE = DATA_DIR / "items.json"
 MAX_UPLOAD_MB = int(os.environ.get("LANBOX_MAX_UPLOAD_MB", "1024"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 CLIENT_TTL_SECONDS = int(os.environ.get("LANBOX_CLIENT_TTL_SECONDS", "20"))
+BACKGROUND_CLIENT_TTL_SECONDS = int(os.environ.get("LANBOX_BACKGROUND_CLIENT_TTL_SECONDS", "600"))
 CLEANUP_INTERVAL_SECONDS = int(os.environ.get("LANBOX_CLEANUP_INTERVAL_SECONDS", "5"))
 
 ITEM_LOCK = threading.Lock()
@@ -93,10 +94,30 @@ def form_file_fields(form, name):
 
 
 def prune_active_clients():
-    cutoff = time.time() - CLIENT_TTL_SECONDS
-    expired = [client_id for client_id, seen_at in ACTIVE_CLIENTS.items() if seen_at < cutoff]
+    now = time.time()
+    expired = []
+    for client_id, client in ACTIVE_CLIENTS.items():
+        if isinstance(client, dict):
+            seen_at = float(client.get("seen_at", 0))
+            state = client.get("state", "active")
+        else:
+            seen_at = float(client)
+            state = "active"
+        ttl = BACKGROUND_CLIENT_TTL_SECONDS if state == "background" else CLIENT_TTL_SECONDS
+        if seen_at < now - ttl:
+            expired.append(client_id)
     for client_id in expired:
         ACTIVE_CLIENTS.pop(client_id, None)
+
+
+def active_client_counts():
+    counts = {"active": 0, "background": 0}
+    for client in ACTIVE_CLIENTS.values():
+        state = client.get("state", "active") if isinstance(client, dict) else "active"
+        if state not in counts:
+            state = "active"
+        counts[state] += 1
+    return counts
 
 
 def remove_unsaved_items_if_idle():
@@ -458,6 +479,8 @@ class LanBoxHandler(BaseHTTPRequestHandler):
                 "hostname": socket.gethostname(),
                 "port": self.server.server_port,
                 "max_upload_mb": MAX_UPLOAD_MB,
+                "client_ttl_seconds": CLIENT_TTL_SECONDS,
+                "background_client_ttl_seconds": BACKGROUND_CLIENT_TTL_SECONDS,
                 "addresses": local_addresses(self.server.server_port),
             })
             return
@@ -577,17 +600,29 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         if not re.fullmatch(r"[A-Za-z0-9._-]{8,120}", client_id):
             self.send_json({"error": "Invalid client_id"}, HTTPStatus.BAD_REQUEST)
             return
+        state = str(payload.get("state", "active")).strip()
+        if state not in ("active", "background"):
+            state = "active"
         with ACTIVE_LOCK:
-            ACTIVE_CLIENTS[client_id] = time.time()
+            ACTIVE_CLIENTS[client_id] = {
+                "seen_at": time.time(),
+                "state": state,
+            }
             prune_active_clients()
             active_count = len(ACTIVE_CLIENTS)
-        self.send_json({"ok": True, "active_clients": active_count, "ttl_seconds": CLIENT_TTL_SECONDS})
+            counts = active_client_counts()
+        self.send_json({
+            "ok": True,
+            "active_clients": active_count,
+            "client_counts": counts,
+            "ttl_seconds": CLIENT_TTL_SECONDS,
+            "background_ttl_seconds": BACKGROUND_CLIENT_TTL_SECONDS,
+        })
 
     def handle_client_close(self, client_id):
         with ACTIVE_LOCK:
             ACTIVE_CLIENTS.pop(client_id, None)
-        removed = remove_unsaved_items_if_idle()
-        self.send_json({"ok": True, "removed": removed})
+        self.send_json({"ok": True})
 
     def handle_pin_item(self, item_id, pinned=None):
         if pinned is None:

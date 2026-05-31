@@ -420,13 +420,28 @@ async function heartbeat() {
   await fetch("/api/heartbeat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ client_id: clientId }),
+    body: JSON.stringify({
+      client_id: clientId,
+      state: document.hidden ? "background" : "active",
+    }),
     cache: "no-store",
   });
 }
 
+function heartbeatBeacon() {
+  const payload = JSON.stringify({
+    client_id: clientId,
+    state: document.hidden ? "background" : "active",
+  });
+  navigator.sendBeacon("/api/heartbeat", new Blob([payload], { type: "application/json" }));
+}
+
 window.addEventListener("pagehide", () => {
   navigator.sendBeacon(`/api/clients/${encodeURIComponent(clientId)}/close`);
+});
+
+document.addEventListener("visibilitychange", () => {
+  heartbeatBeacon();
 });
 
 heartbeat().catch(() => {});
