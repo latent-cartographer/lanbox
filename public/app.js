@@ -253,7 +253,7 @@ function renderItems(items) {
   items.forEach((item) => {
     const node = template.content.firstElementChild.cloneNode(true);
     node.dataset.id = item.id;
-    node.querySelector(".meta").textContent = `${formatTime(item.created_at)} · ${item.client_ip || "unknown"} · ${item.saved ? "已保存" : "临时"}`;
+    node.querySelector(".meta").textContent = `${formatTime(item.created_at)} · ${item.client_ip || "unknown"} · ${item.saved ? "已钉住" : "临时"}`;
     node.querySelector("h3").textContent = item.title || "";
     renderText(item.text || "", node.querySelector(".item-text"));
 
@@ -285,18 +285,22 @@ function renderItems(items) {
     });
 
     const keepButton = node.querySelector(".keep");
-    keepButton.disabled = Boolean(item.saved);
-    keepButton.classList.toggle("saved", Boolean(item.saved));
-    keepButton.title = item.saved ? "已保存" : "保存";
-    keepButton.setAttribute("aria-label", item.saved ? "已保存" : "保存");
+    keepButton.classList.toggle("pinned", Boolean(item.saved));
+    keepButton.title = item.saved ? "取消钉住" : "钉住";
+    keepButton.setAttribute("aria-label", item.saved ? "取消钉住" : "钉住");
     keepButton.addEventListener("click", async () => {
-      const response = await fetch(`/api/items/${encodeURIComponent(item.id)}/save`, { method: "POST" });
+      const nextPinned = !item.saved;
+      const response = await fetch(`/api/items/${encodeURIComponent(item.id)}/pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pinned: nextPinned }),
+      });
       if (!response.ok) {
-        setStatus("保存失败", "error");
+        setStatus(nextPinned ? "钉住失败" : "取消钉住失败", "error");
         return;
       }
       await loadItems();
-      setStatus("已保存，不会随页面关闭自动删除", "ok");
+      setStatus(nextPinned ? "已钉住，无人访问时也会保留" : "已取消钉住，会随无人访问自动清理", "ok");
     });
 
     const copyText = buildCopyValue(item);

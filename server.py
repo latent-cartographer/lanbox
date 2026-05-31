@@ -487,9 +487,13 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         if close_match:
             self.handle_client_close(close_match.group(1))
             return
+        pin_match = re.fullmatch(r"/api/items/([A-Za-z0-9-]+)/pin", parsed.path)
+        if pin_match:
+            self.handle_pin_item(pin_match.group(1))
+            return
         save_match = re.fullmatch(r"/api/items/([A-Za-z0-9-]+)/save", parsed.path)
         if save_match:
-            self.handle_save_item(save_match.group(1))
+            self.handle_pin_item(save_match.group(1), True)
             return
         if parsed.path != "/api/items":
             self.send_text("Not found", HTTPStatus.NOT_FOUND)
@@ -585,13 +589,23 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         removed = remove_unsaved_items_if_idle()
         self.send_json({"ok": True, "removed": removed})
 
-    def handle_save_item(self, item_id):
+    def handle_pin_item(self, item_id, pinned=None):
+        if pinned is None:
+            content_length = int(self.headers.get("Content-Length", "0") or "0")
+            raw = self.rfile.read(content_length) if content_length else b"{}"
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON"}, HTTPStatus.BAD_REQUEST)
+                return
+            pinned = bool(payload.get("pinned"))
+
         with ITEM_LOCK:
             items = load_items()
             for item in items:
                 if item.get("id") == item_id:
-                    item["saved"] = True
-                    item["saved_at"] = now_iso()
+                    item["saved"] = pinned
+                    item["saved_at"] = now_iso() if pinned else ""
                     save_items(items)
                     self.send_json({"item": item})
                     return

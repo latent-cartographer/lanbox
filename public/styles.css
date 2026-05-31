@@ -402,7 +402,7 @@ button:disabled {
   color: var(--accent-dark);
 }
 
-.keep.saved {
+.keep.pinned {
   color: var(--muted);
 }
 
