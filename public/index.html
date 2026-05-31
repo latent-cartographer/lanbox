@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>LanBox</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>LanBox</h1>
+        <p id="serverHint">局域网传递板</p>
+      </div>
+      <button class="icon-button" id="refreshBtn" title="刷新" aria-label="刷新">↻</button>
+    </header>
+
+    <main class="shell">
+      <section class="composer" aria-label="发送内容">
+        <div class="join-panel">
+          <button class="scan-toggle" type="button" id="toggleQrBtn">扫码进入</button>
+          <div class="qr-panel" id="qrPanel" hidden>
+            <img id="qrImage" alt="LanBox 访问二维码">
+          </div>
+        </div>
+        <form id="shareForm">
+          <div class="field">
+            <label for="text">文本或链接</label>
+            <textarea id="text" name="text" rows="6" placeholder="粘贴文章链接、备注、软件地址或任意文本"></textarea>
+          </div>
+          <div class="dropzone" id="dropzone">
+            <input id="files" name="files" type="file" multiple>
+            <div>
+              <strong>选择文件</strong>
+              <span>也可以拖进来或粘贴图片</span>
+            </div>
+          </div>
+          <div class="selected" id="selectedFiles" aria-live="polite"></div>
+          <div class="actions">
+            <button class="primary" type="submit">发送</button>
+            <button type="button" id="clearBtn">清空</button>
+          </div>
+          <p class="status" id="status" role="status"></p>
+        </form>
+      </section>
+
+      <section class="feed" aria-label="已共享内容">
+        <div class="feed-head">
+          <h2>共享内容</h2>
+          <span id="itemCount">0</span>
+        </div>
+        <div class="items" id="items"></div>
+      </section>
+    </main>
+
+    <template id="itemTemplate">
+      <article class="item">
+        <div class="item-main">
+          <div class="meta"></div>
+          <h3></h3>
+          <p class="item-text"></p>
+          <div class="file-list"></div>
+        </div>
+        <div class="item-actions">
+          <button class="icon-button keep" title="保存" aria-label="保存">✓</button>
+          <button class="icon-button copy" title="复制内容" aria-label="复制内容">⧉</button>
+          <button class="icon-button remove" title="删除" aria-label="删除">×</button>
+        </div>
+      </article>
+    </template>
+
+    <div class="preview-modal" id="previewModal" hidden>
+      <div class="preview-backdrop" id="previewBackdrop"></div>
+      <section class="preview-window" aria-label="文件预览">
+        <div class="preview-head">
+          <h2 id="previewTitle">文件预览</h2>
+          <button class="icon-button" id="closePreviewBtn" type="button" title="关闭" aria-label="关闭">×</button>
+        </div>
+        <div class="preview-body" id="previewBody"></div>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
