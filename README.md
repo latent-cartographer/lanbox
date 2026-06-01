@@ -14,6 +14,18 @@ LanBox 是一个只在内网使用的浏览器传递板。任意设备打开同�
 python3 server.py
 ```
 
+也可以使用启动脚本：
+
+```bash
+./scripts/start.sh
+```
+
+固定访问口令启动：
+
+```bash
+LANBOX_ACCESS_CODE=123456 ./scripts/start.sh
+```
+
 默认监听 `0.0.0.0`，端口可通过 `LANBOX_PORT` 配置。启动后终端会打印类似：
 
 ```text
