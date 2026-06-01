@@ -26,6 +26,33 @@ python3 server.py
 LANBOX_ACCESS_CODE=123456 ./scripts/start.sh
 ```
 
+## macOS 常驻启动
+
+如果希望 LanBox 登录后自动启动，并且进程退出后自动拉起，可以安装 LaunchAgent：
+
+```bash
+LANBOX_ACCESS_CODE=off ./scripts/install-launchagent.sh
+```
+
+也可以固定访问口令：
+
+```bash
+LANBOX_ACCESS_CODE=123456 ./scripts/install-launchagent.sh
+```
+
+查看状态：
+
+```bash
+launchctl print gui/$(id -u)/com.latent-cartographer.lanbox
+```
+
+卸载：
+
+```bash
+launchctl bootout gui/$(id -u)/com.latent-cartographer.lanbox
+rm ~/Library/LaunchAgents/com.latent-cartographer.lanbox.plist
+```
+
 默认监听 `0.0.0.0`，端口可通过 `LANBOX_PORT` 配置。启动后终端会打印类似：
 
 ```text
