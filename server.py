@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import cgi
 import hmac
 import json
 import mimetypes
@@ -15,6 +14,8 @@ import threading
 import time
 import zipfile
 from datetime import datetime, timezone
+from email.parser import BytesParser
+from email.policy import default
 from html import escape
 from http.cookies import SimpleCookie
 from http import HTTPStatus
@@ -130,11 +131,36 @@ def parse_ttl_seconds(value):
     return ttl if ttl in allowed else 0
 
 
-def form_file_fields(form, name):
-    if name not in form:
-        return []
-    field = form[name]
-    return field if isinstance(field, list) else [field]
+def parse_multipart_form(raw, content_type):
+    message = BytesParser(policy=default).parsebytes(
+        f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8") + raw
+    )
+    fields = {}
+    files = []
+    if not message.is_multipart():
+        return fields, files
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        filename = part.get_filename()
+        payload = part.get_payload(decode=True) or b""
+        if filename:
+            files.append({
+                "field": name,
+                "filename": filename,
+                "content_type": part.get_content_type(),
+                "payload": payload,
+            })
+        else:
+            charset = part.get_content_charset() or "utf-8"
+            fields.setdefault(name, []).append(payload.decode(charset, errors="replace"))
+    return fields, files
+
+
+def first_field(fields, name):
+    values = fields.get(name) or [""]
+    return values[0]
 
 
 def prune_active_clients():
@@ -665,20 +691,13 @@ class LanBoxHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Content-Type must be multipart/form-data"}, HTTPStatus.BAD_REQUEST)
             return
 
-        form = cgi.FieldStorage(
-            fp=self.rfile,
-            headers=self.headers,
-            environ={
-                "REQUEST_METHOD": "POST",
-                "CONTENT_TYPE": ctype,
-                "CONTENT_LENGTH": str(content_length),
-            },
-        )
+        raw_form = self.rfile.read(content_length)
+        fields, uploaded_files = parse_multipart_form(raw_form, ctype)
 
-        text = (form.getfirst("text", "") or "").strip()
-        title = (form.getfirst("title", "") or "").strip()
-        device_name = safe_device_name(form.getfirst("device_name", "") or "")
-        ttl_seconds = parse_ttl_seconds(form.getfirst("ttl_seconds", "") or "")
+        text = (first_field(fields, "text") or "").strip()
+        title = (first_field(fields, "title") or "").strip()
+        device_name = safe_device_name(first_field(fields, "device_name") or "")
+        ttl_seconds = parse_ttl_seconds(first_field(fields, "ttl_seconds") or "")
         expires_at = ""
         if ttl_seconds:
             expires_at = datetime.fromtimestamp(time.time() + ttl_seconds, timezone.utc).isoformat()
@@ -686,21 +705,21 @@ class LanBoxHandler(BaseHTTPRequestHandler):
         item_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + os.urandom(4).hex()
         item_dir = UPLOAD_DIR / item_id
 
-        for field in form_file_fields(form, "files"):
-            if not getattr(field, "filename", None):
+        for field in uploaded_files:
+            if field.get("field") != "files" or not field.get("filename"):
                 continue
             item_dir.mkdir(parents=True, exist_ok=True)
-            original = safe_filename(field.filename)
+            original = safe_filename(field["filename"])
             target = unique_path(item_dir, original)
             with target.open("wb") as out:
-                shutil.copyfileobj(field.file, out)
+                out.write(field["payload"])
             stored_name = target.name
             rel_url = f"/files/{quote(item_id)}/{quote(stored_name)}"
             files.append({
                 "name": original,
                 "stored": stored_name,
                 "size": target.stat().st_size,
-                "mime": field.type or mimetypes.guess_type(original)[0] or "application/octet-stream",
+                "mime": field.get("content_type") or mimetypes.guess_type(original)[0] or "application/octet-stream",
                 "url": rel_url,
             })
 
